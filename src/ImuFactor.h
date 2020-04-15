@@ -39,17 +39,20 @@ struct IMUHelper {
         I_3x3 * pow(0.0565, 2.0);  // acc white noise in continuous
     p->integrationCovariance =
         I_3x3 * 1e-9;  // integration uncertainty continuous
+//    p->gyroscopeCovariance =
+//        I_3x3 * pow(4.0e-5, 2.0);  // gyro white noise in continuous
     p->gyroscopeCovariance =
-        I_3x3 * pow(4.0e-5, 2.0);  // gyro white noise in continuous
-    p->biasAccCovariance = I_3x3 * pow(0.00002, 2.0);  // acc bias in continuous
+        I_3x3 * pow(4.0e-3, 2.0);  // gyro white noise in continuous
+    //p->biasAccCovariance = I_3x3 * pow(0.00002, 2.0);  // acc bias in continuous
+    p->biasAccCovariance = I_3x3 * pow(0.002, 2.0);  // acc bias in continuous
     p->biasOmegaCovariance =
         I_3x3 * pow(0.001, 2.0);  // gyro bias in continuous
     p->biasAccOmegaInt = Matrix::Identity(6, 6) * 1e-5;
 
     // body to IMU rotation
-//    Rot3 iRb(0.036129, -0.998727, 0.035207,
-//             0.045417, -0.033553, -0.998404,
-//             0.998315, 0.037670, 0.044147);
+    //Rot3 iRb(0.036129, -0.998727, 0.035207,
+    //         0.045417, -0.033553, -0.998404,
+    //         0.998315, 0.037670, 0.044147);
     //Rot3 iRb(1,0,0,0,1,0,0,0,1.0);
 //data:  [0, 0, 1, 0,
 //28            -1, 0, 0, 0.12,
@@ -58,8 +61,15 @@ struct IMUHelper {
 
     //Rot3 iRb(1,0,0,0,1,0,0,0,1);
     //Rot3 iRb(1,0,0,0,0,-1,0,1,0);
-//    Rot3 iRb(0,1,0,-1,0,0,0,0,1);
-    Rot3 iRb(0,-1,0,1,0,0,0,0,1);
+    //Rot3 iRb(0,1,0,-1,0,0,0,0,1);
+    //Rot3 iRb(1,0,0,0,0,-1,0,1,0);
+    //Rot3 iRb(1,0,0,0,0,1,0,-1,0);
+//    Rot3 iRb(0, 0, 1,
+//             -1, 0, 0,
+//             0, -1, 0);
+    Rot3 iRb = Rot3(); //IMU in gazebo is FLU. SLAM (vins_estimator/odometry)is FLU, but camera pose is rotated to ENU!
+    //iRb = Rot3(iRb.matrix()*iRb.matrix());
+
 
     // body to IMU translation (meters)
     Point3 iTb(0.03, -0.025, -0.06);
@@ -70,8 +80,8 @@ struct IMUHelper {
     Rot3 prior_rotation = Rot3(I_3x3);
     Pose3 prior_pose(prior_rotation, Point3(0, 0, 0));
 
-    Vector3 acc_bias(0.0, -0.0942015, 0.0);  // in camera frame
-    Vector3 gyro_bias(-0.00527483, -0.00757152, -0.00469968);
+    Vector3 acc_bias(0.0, 0.0, 0.0);  // in camera frame
+    Vector3 gyro_bias(0.0, 0.0, 0.0);
 
     priorImuBias = imuBias::ConstantBias(acc_bias, gyro_bias);
 
