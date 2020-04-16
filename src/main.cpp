@@ -8,7 +8,10 @@
 #include <string>
 
 #include <gtsam/nonlinear/ISAM2.h>
+#include <gtsam_unstable/nonlinear/BatchFixedLagSmoother.h>
+#include <gtsam_unstable/nonlinear/IncrementalFixedLagSmoother.h>
 #include <gtsam_unstable/slam/SmartStereoProjectionPoseFactor.h>
+
 
 #include "gtsam/navigation/AHRSFactor.h"
 //#include "gtsam/navigation/GPSFactor.h"
@@ -21,6 +24,7 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
 #include "MagHeadingFactor.h"
+#include "Timer.h"
 using namespace std;
 
 struct states{
@@ -30,6 +34,9 @@ struct states{
     gtsam::Values initialEstimate;
     gtsam::ISAM2* p_isam;
     Pose3 last_optimized_pose;
+
+    IncrementalFixedLagSmoother smootherISAM2;
+    FixedLagSmoother::KeyTimestampMap newTimestamps;
 
     //file reading;
     ifstream* pFile;
@@ -61,11 +68,13 @@ struct states{
         {
             auto gaussian = noiseModel::Diagonal::Sigmas(
                         (Vector(6) << Vector3::Constant(0.5), Vector3::Constant(0.5)).finished());
-            this->inputGraph.add(GPSFactorWithHeading(X(0),X(slam_id),Symbol('R',0),first_gps,gps_buf,gaussian));
+            //this->inputGraph.add(GPSFactorWithHeading(X(0),X(slam_id),Symbol('R',0),first_gps,gps_buf,gaussian));
+            this->inputGraph.push_back(GPSFactorWithHeading(X(0),X(slam_id),Symbol('R',0),first_gps,gps_buf,gaussian));
 
             auto gaussian_initial = noiseModel::Diagonal::Sigmas(
                                             (Vector(6) << Vector3::Constant(0.8), Vector3::Constant(0.5)).finished());
-            this->inputGraph.add(PriorFactor<Pose3>(X(0),Pose3(),gaussian_initial));
+            //this->inputGraph.add(PriorFactor<Pose3>(X(0),Pose3(),gaussian_initial));
+
             gps_buf_valid = false;
         }
     }
@@ -92,7 +101,8 @@ struct states{
         if(magnet_avail)//usage:
         {
             SharedNoiseModel model = noiseModel::Isotropic::Sigma(3, 2.0);
-            this->inputGraph.add(MagHeadingFactor(X(slam_id),magnet_buf,s,direction,bias,model));
+            //this->inputGraph.add(MagHeadingFactor(X(slam_id),magnet_buf,s,direction,bias,model));
+            this->inputGraph.push_back(MagHeadingFactor(X(slam_id),magnet_buf,s,direction,bias,model));
             magnet_avail = false;
         }
     }
@@ -112,8 +122,16 @@ struct states{
                                     X(this->slam_id), V(this->slam_id),
                                     B(this->slam_id - 1),B(this->slam_id),
                                     *imu.preintegrated);
-        inputGraph.add(imuFactor);
-        auto isam_res = p_isam->update(inputGraph, initialEstimate);
+        this->newTimestamps[X(this->slam_id)] = slam_id;
+        this->newTimestamps[V(this->slam_id)] = slam_id;
+        this->newTimestamps[B(this->slam_id)] = slam_id;
+        //inputGraph.add(imuFactor);
+        inputGraph.push_back(imuFactor);
+        ScopeTimer t_optimization("Optimizer iterate");
+        //auto isam_res = p_isam->update(inputGraph, initialEstimate);
+        this->smootherISAM2.update(inputGraph,initialEstimate,newTimestamps);
+
+        auto isam_res = this->smootherISAM2.getISAM2Result();
         {
             if(isam_res.errorBefore&&isam_res.errorAfter)
             {
@@ -125,22 +143,26 @@ struct states{
             }
         }
 
-        Values currentEstimate = p_isam->calculateEstimate();
+
+        //Values currentEstimate = p_isam->calculateEstimate();
+
 
         imu.propState = imu.preintegrated->predict(imu.prevState, imu.prevBias);
-        imu.prevState = NavState(currentEstimate.at<Pose3>(X(this->slam_id)),
-                                 currentEstimate.at<Vector3>(V(this->slam_id)));
-        imu.prevBias = currentEstimate.at<imuBias::ConstantBias>(B(this->slam_id));
+        imu.prevState = NavState(smootherISAM2.calculateEstimate<Pose3>(X(this->slam_id)),
+                                 smootherISAM2.calculateEstimate<Vector3>(V(this->slam_id)));
+        imu.prevBias = smootherISAM2.calculateEstimate<imuBias::ConstantBias>(B(this->slam_id));
         imu.preintegrated->resetIntegrationAndSetBias(imu.prevBias);
 
-        inputGraph.resize(0);
-        initialEstimate.clear();
+
+
+
+
 
         //output
-        Pose3 pose = currentEstimate.at(X(slam_id)).cast<Pose3>();
+        Pose3 pose = smootherISAM2.calculateEstimate<Pose3>(X(slam_id));
         last_optimized_pose = pose;
         auto position = pose.translation();
-        Vector3 velocity = currentEstimate.at(V(slam_id)).cast<Vector3>();
+        Vector3 velocity = smootherISAM2.calculateEstimate<Vector3>(V(slam_id));
         cout<<"SLAM id:"<<slam_id<<";Position:"<<position.x()<<","<<position.y()<<","<<position.z()
            <<endl<<"Velocity:"<<velocity[0]<<","<<velocity[1]<<","<<velocity[2]<<endl;
         //Visualize relative rotation;
@@ -155,6 +177,13 @@ struct states{
         Rot3 original_rot(slam_quat);
         cout<<"Original ypr:"<<Point3(original_rot.ypr()*180/3.14159)<<endl;
         cout<<"-----------"<<endl;
+
+
+
+        t_optimization.watch("ISAM time cost:");
+        inputGraph.resize(0);
+        initialEstimate.clear();
+        newTimestamps.clear();
     }
 
 }
@@ -190,22 +219,29 @@ void initGraph()
     state.inputGraph.emplace_shared<PriorFactor<Pose3>>(X(0), Pose3::identity(),
                                                priorPoseNoise);
     state.initialEstimate.insert(X(0), Pose3::identity());
+    state.newTimestamps[X(0)] = 0;
 
     // Bias prior
     state.inputGraph.add(PriorFactor<imuBias::ConstantBias>(B(0), state.imu.priorImuBias,
                                                    state.imu.biasNoiseModel));
     state.initialEstimate.insert(B(0), state.imu.priorImuBias);
+    state.newTimestamps[B(0)] = 0;
 
     // Velocity prior - assume stationary
     state.inputGraph.add(
         PriorFactor<Vector3>(V(0), Vector3(0, 0, 0), state.imu.velocityNoiseModel));
     state.initialEstimate.insert(V(0), Vector3(0, 0, 0));
+    state.newTimestamps[V(0)] = 0;
 
     ISAM2Params parameters;
     parameters.relinearizeThreshold = 0.1;
-    parameters.setEnableRelinearization(false);
+    parameters.setEnableRelinearization(true);
     parameters.setEvaluateNonlinearError(true);
+    //parameters.setRelinearizeSkip(3);
     state.p_isam = new gtsam::ISAM2(parameters);
+
+    double lag = 30.0;
+    state.smootherISAM2 = IncrementalFixedLagSmoother(lag,parameters);
 
 
     //add gps_slam yaw diff symbol.
@@ -290,7 +326,7 @@ void processLine()
         }
         state.imu_callback();
         //state.gps_callback();
-        //state.magnet_callback();
+        state.magnet_callback();
         state.isam_forward();
         state.slam_id++;
     }
@@ -327,8 +363,9 @@ void processLine()
 
 
 
-int main()
+int main(int argc,char** argv)
 {
+    google::InitGoogleLogging(argv[0]);
     state.pFile = new ifstream("output.csv");
     initGraph();
     while(!state.pFile->eof())
