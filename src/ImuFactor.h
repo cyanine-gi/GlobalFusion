@@ -32,7 +32,7 @@ struct IMUHelper {
 
     // expect IMU to be rotated in image space co-ords
     //Vector3 g__(0.0, 9.8, 0.0);
-    Vector3 g__(0.0, 0.0, 9.8);
+    Vector3 g__(0.0, 0.0, 9.806600);
     boost::shared_ptr<PreintegratedCombinedMeasurements::Params> p(new PreintegratedCombinedMeasurements::Params( g__));
 
     p->accelerometerCovariance =
@@ -42,9 +42,11 @@ struct IMUHelper {
 //    p->gyroscopeCovariance =
 //        I_3x3 * pow(4.0e-5, 2.0);  // gyro white noise in continuous
     p->gyroscopeCovariance =
-        I_3x3 * pow(4.0e-3, 2.0);  // gyro white noise in continuous
-    //p->biasAccCovariance = I_3x3 * pow(0.00002, 2.0);  // acc bias in continuous
-    p->biasAccCovariance = I_3x3 * pow(0.002, 2.0);  // acc bias in continuous
+        I_3x3 * pow(4.0e-4, 2.0);  // gyro white noise in continuous
+//    p->gyroscopeCovariance =
+//        I_3x3 * pow(4.0e-3, 2.0);  // gyro white noise in continuous
+    p->biasAccCovariance = I_3x3 * pow(0.00002, 2.0);  // acc bias in continuous
+//    p->biasAccCovariance = I_3x3 * pow(0.002, 2.0);  // acc bias in continuous
     p->biasOmegaCovariance =
         I_3x3 * pow(0.001, 2.0);  // gyro bias in continuous
     p->biasAccOmegaInt = Matrix::Identity(6, 6) * 1e-5;

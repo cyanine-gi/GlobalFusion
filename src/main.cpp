@@ -14,7 +14,7 @@
 
 
 #include "gtsam/navigation/AHRSFactor.h"
-//#include "gtsam/navigation/GPSFactor.h"
+#include "gtsam/navigation/GPSFactor.h"
 //#include "gtsam_unstable/slam/BiasedGPSFactor.h"
 #include "gpsfactorwithheading.h"
 #include "GPSExpand.h"
@@ -25,6 +25,7 @@
 #include <gtsam/nonlinear/Values.h>
 #include "MagHeadingFactor.h"
 #include "Timer.h"
+#include "IO_Manager.h"
 using namespace std;
 
 struct states{
@@ -66,22 +67,40 @@ struct states{
     {
         if(gps_buf_valid)
         {
-            auto gaussian = noiseModel::Diagonal::Sigmas(
-                        (Vector(6) << Vector3::Constant(0.5), Vector3::Constant(0.5)).finished());
-            //this->inputGraph.add(GPSFactorWithHeading(X(0),X(slam_id),Symbol('R',0),first_gps,gps_buf,gaussian));
-            this->inputGraph.push_back(GPSFactorWithHeading(X(0),X(slam_id),Symbol('R',0),first_gps,gps_buf,gaussian));
+//            {
+//            //gps with yaw in ENU....not avail!
+//                auto gaussian = noiseModel::Diagonal::Sigmas(
+//                            (Vector(6) << Vector3::Constant(0.5), Vector3::Constant(0.5)).finished());
+//                //this->inputGraph.add(GPSFactorWithHeading(X(0),X(slam_id),Symbol('R',0),first_gps,gps_buf,gaussian));
+//                this->inputGraph.push_back(GPSFactorWithHeading(X(0),X(slam_id),Symbol('R',0),first_gps,gps_buf,gaussian));
 
-            auto gaussian_initial = noiseModel::Diagonal::Sigmas(
-                                            (Vector(6) << Vector3::Constant(0.8), Vector3::Constant(0.5)).finished());
-            //this->inputGraph.add(PriorFactor<Pose3>(X(0),Pose3(),gaussian_initial));
+//                auto gaussian_initial = noiseModel::Diagonal::Sigmas(
+//                            (Vector(6) << Vector3::Constant(0.8), Vector3::Constant(0.5)).finished());
+//                //this->inputGraph.add(PriorFactor<Pose3>(X(0),Pose3(),gaussian_initial));
 
-            gps_buf_valid = false;
+//                gps_buf_valid = false;
+//            }
+            //{
+//                //GPS without yaw in FLU!
+//                Rot3 enu_to_flu = Rot3::AxisAngle(Unit3(0,0,1),-90);
+//                Eigen::Vector3d FLU_GPS = enu_to_flu*gps_buf;
+                Eigen::Vector3d FLU_GPS = gps_buf;
+                cout<<"FLU_GPS:"<<Point3(FLU_GPS)<<endl;
+                auto gaussian = noiseModel::Diagonal::Sigmas(Vector3::Constant(0.1));
+                this->inputGraph.push_back(GPSFactor(X(slam_id),FLU_GPS,gaussian));
+                gps_buf_valid = false;
+            //}
+        }
+        else
+        {
+            cout<<"FLU GPS does not exist!"<<endl;
         }
     }
     void magnet_callback()
     {
         //Point3 nM(22653.29982, -1956.83010, 44202.47862);
         Point3 nM(0.703118927777,21.2741419,41.9381707907);
+        //Point3 nM(21.2741419,-0.703118927777,41.9381707907);
         // Let's assume scale factor,
         double scale = 1;//255.0 / 50000.0;
         Point3 bias(0,0,0);//(10, -10, 50);
@@ -100,6 +119,7 @@ struct states{
 
         if(magnet_avail)//usage:
         {
+//            SharedNoiseModel model = noiseModel::Isotropic::Sigma(3, 2.0);
             SharedNoiseModel model = noiseModel::Isotropic::Sigma(3, 2.0);
             //this->inputGraph.add(MagHeadingFactor(X(slam_id),magnet_buf,s,direction,bias,model));
             this->inputGraph.push_back(MagHeadingFactor(X(slam_id),magnet_buf,s,direction,bias,model));
@@ -177,7 +197,16 @@ struct states{
         Rot3 original_rot(slam_quat);
         cout<<"Original ypr:"<<Point3(original_rot.ypr()*180/3.14159)<<endl;
         cout<<"-----------"<<endl;
-
+        vector<double> slam_optimized;
+        slam_optimized.push_back(position.x());
+        slam_optimized.push_back(position.y());
+        slam_optimized.push_back(position.z());
+        auto q__ = rot_.quaternion();//q__: w,x,y,z Vector.
+        slam_optimized.push_back(q__[0]);
+        slam_optimized.push_back(q__[1]);
+        slam_optimized.push_back(q__[2]);
+        slam_optimized.push_back(q__[3]);
+        GlobalFusion::outputResult("SLAM",slam_optimized);//write to a file.
 
 
         t_optimization.watch("ISAM time cost:");
@@ -241,6 +270,7 @@ void initGraph()
     state.p_isam = new gtsam::ISAM2(parameters);
 
     double lag = 30.0;
+    //double lag = 10.0;
     state.smootherISAM2 = IncrementalFixedLagSmoother(lag,parameters);
 
 
@@ -300,23 +330,26 @@ void processLine()
             Eigen::Matrix4d m = (prev_pos_abs.matrix().inverse());//*
             Eigen::Matrix4d n = (current_pos_abs.matrix());
             Pose3 diff_pose = prev_pos_abs.transformPoseTo(current_pos_abs);
+
+            //Pose3 diff_pose = current_pos_abs.transformPoseTo(prev_pos_abs);
             //Pose3 diff_pose(n*m);
             auto gaussian = noiseModel::Diagonal::Sigmas(
-                                        (Vector(6) << Vector3::Constant(5.0e-2), Vector3::Constant(5.0e-2)).finished());
+                                        //(Vector(6) << Vector3::Constant(5.0e-2), Vector3::Constant(5.0e-2)).finished());
+                                        (Vector(6) << Vector3::Constant(5.0e-6), Vector3::Constant(5.0e-3)).finished());
             //Relative.
-//            {
-
-//                state.inputGraph.add(BetweenFactor<Pose3>(X(state.slam_id-1),X(state.slam_id),diff_pose,gaussian));
-//                state.slam_pos = current_pos;
-//                state.slam_quat=Eigen::Quaterniond(w,x,y,z);
-//            }
-
-            //Absolute.
             {
-                auto gaussian_abs = noiseModel::Diagonal::Sigmas(
-                            (Vector(6) << Vector3::Constant(0.05), Vector3::Constant(0.05)).finished());
-                state.inputGraph.add(PriorFactor<Pose3>(X(state.slam_id),current_pos_abs,gaussian_abs)); //DEBUG only.
+
+                state.inputGraph.add(BetweenFactor<Pose3>(X(state.slam_id-1),X(state.slam_id),diff_pose,gaussian));
+                state.slam_pos = current_pos;
+                state.slam_quat=Eigen::Quaterniond(w,x,y,z);
             }
+
+//            //Absolute.
+//            {
+//                auto gaussian_abs = noiseModel::Diagonal::Sigmas(
+//                            (Vector(6) << Vector3::Constant(0.05), Vector3::Constant(0.05)).finished());
+//                state.inputGraph.add(PriorFactor<Pose3>(X(state.slam_id),current_pos_abs,gaussian_abs)); //DEBUG only.
+//            }
 
             auto s_pos = current_pos;
             cout<<"SLAM only:"<<s_pos[0]<<","<<s_pos[1]<<","<<s_pos[2]<<endl;
@@ -325,7 +358,7 @@ void processLine()
             state.slam_quat=Eigen::Quaterniond(w,x,y,z);
         }
         state.imu_callback();
-        //state.gps_callback();
+        state.gps_callback();
         state.magnet_callback();
         state.isam_forward();
         state.slam_id++;
@@ -351,10 +384,14 @@ void processLine()
             Eigen::Vector3d current_pos_gps = state.gps_center.query_input_relative_vec(lon_,lat_,alt_);
             state.gps_buf = current_pos_gps;
             cout<<"gps relative:"<<current_pos_gps<<endl;
-            if(current_pos_gps.squaredNorm()>1.0)
-            {
-                state.gps_buf_valid = true;
-            }
+//Since we use magnetic sensor to find out yaw, this logic is useless.
+//            if(current_pos_gps.squaredNorm()>1.0)
+//            {
+//                state.gps_buf_valid = true;
+//            }
+
+//Instead:
+            state.gps_buf_valid = true;
         }
 
     }
